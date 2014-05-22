@@ -5,7 +5,7 @@ import Graphics.UI.GLUT
 import Data.IORef
 import Data.Array
 import Control.Arrow (first)
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import Data.Maybe (isJust, isNothing)
 import System.Random
 import Control.Concurrent (threadDelay)
@@ -16,7 +16,7 @@ main :: IO ()
 main = do
   (progName, args) <- getArgsAndInitialize
   putStrLn "Tetris3D"
-  putStrLn "move: up/down/left/right  rotate tetromino: W/S  rotate view: A/D  down: space"
+  putStrLn "move: up/down/left/right  rotate tetromino: W/S  rotate view: A/D  down: space  pause: P"
   putStrLn "Have fun!"
   rng <- newStdGen
   stateRef <- newIORef (state0 rng)
@@ -58,7 +58,7 @@ reshape size = do
   viewport $= (Position 0 0, size)
 
 
-display :: (IORef State) -> DisplayCallback
+display :: IORef State -> DisplayCallback
 display stateRef = do
   state <- get stateRef
   loadIdentity
@@ -75,6 +75,11 @@ display stateRef = do
     applyAnimationTetrominoRotation (viewRotation state) (animationState state)
     color $ Color3 0.5 1.0 (0.8::GLfloat)
     renderCubes $ tetrominoCubes (tetromino state)
+    when (isPaused state) $ preservingMatrix $ do
+      translate $ fromIntegralV $ v3 0 (-1) 2
+      color $ Color3 1.0 1.0 (1.0::GLfloat)  -- ... render a ground plane ...
+      scale 0.002 0.002 (0.002 :: GLfloat)
+      renderString MonoRoman "PAUSED"
   color $ Color3 1.0 1.0 (1.0::GLfloat)  -- ... render a ground plane ...
   normal (Normal3 0 0 (1::GLfloat))
   renderPrimitive Quads $
@@ -85,12 +90,12 @@ display stateRef = do
   flush
 
 
-applyAnimationViewRotation :: (Maybe AnimationState) -> IO ()
+applyAnimationViewRotation :: Maybe AnimationState -> IO ()
 applyAnimationViewRotation (Just (ViewRotation dir, n)) =
   rotate (((fromIntegral(dir*(n-animationFrames)*90))/(fromIntegral animationFrames))::GLfloat) $ Vector3 0 0 (1::GLfloat)
 applyAnimationViewRotation _ = return ()
 
-applyAnimationTetrominoRotation :: Int -> (Maybe AnimationState) -> IO ()
+applyAnimationTetrominoRotation :: Int -> Maybe AnimationState -> IO ()
 applyAnimationTetrominoRotation viewRotation (Just (TetrominoRotation dir, n)) =
   rotate (((fromIntegral(dir*(n-animationFrames)*90))/(fromIntegral animationFrames))::GLfloat) (fromIntegralV axis)
   where axis = applyViewRotation viewRotation (v3 1 0 0)
@@ -105,7 +110,7 @@ renderCubes = mapM_ $ \(v, cc) -> preservingMatrix $ do
   color (Color3 1 1 (1::GLfloat))
   renderObject Wireframe (Cube 1)
 
-keyboardMouse :: (IORef State) -> KeyboardMouseCallback
+keyboardMouse :: IORef State -> KeyboardMouseCallback
 keyboardMouse stateRef (Char ' ') Down _ _ = changeState stateRef tickDown
 keyboardMouse stateRef (SpecialKey KeyLeft) Down _ _ = changeState stateRef (tryMoveConsideringViewRotation (v3 (-1) 0 0))
 keyboardMouse stateRef (SpecialKey KeyRight) Down _ _ = changeState stateRef (tryMoveConsideringViewRotation (v3 1 0 0))
@@ -115,17 +120,18 @@ keyboardMouse stateRef (Char 'a') Down _ _ = changeState stateRef (rotateView (-
 keyboardMouse stateRef (Char 'd') Down _ _ = changeState stateRef (rotateView 1)
 keyboardMouse stateRef (Char 'w') Down _ _ = changeState stateRef (tryRotateTetromino (-1))
 keyboardMouse stateRef (Char 's') Down _ _ = changeState stateRef (tryRotateTetromino 1)
+keyboardMouse stateRef (Char 'p') Down _ _ = changeState stateRef toggleIsPaused
 keyboardMouse _ _ _ _ _ = return ()
 
 
-timer :: (IORef State) -> TimerCallback
+timer :: IORef State -> TimerCallback
 timer stateRef = do
   oldState <- get stateRef
   addTimerCallback (div (initialTimeout*5) ((score oldState)+5)) (timer stateRef)
   changeState stateRef tickDown
 
 
-changeState :: (IORef State) -> (State -> State) -> IO ()
+changeState :: IORef State -> (State -> State) -> IO ()
 changeState stateRef f = do
   oldState <- get stateRef
   let newState = f oldState
@@ -133,9 +139,9 @@ changeState stateRef f = do
     putStrLn $ "SCORE: " ++ show (score newState)
   when (isJust (animationState newState)) $ do
     idleCallback $= Just (idleAnimation stateRef)
-  stateRef $= newState
+  unless (isPaused oldState && isPaused newState) $ do
+    stateRef $= newState
   postRedisplay Nothing
-  
 
 initialTimeout :: Timeout
 initialTimeout = 2000
@@ -147,8 +153,7 @@ idleAnimation stateRef = do
   oldState <- get stateRef
   let newState = oldState {animationState = proceedAnimation (animationState oldState)}
   when (isNothing (animationState newState)) $ idleCallback $= Nothing
-  stateRef $= newState
-  postRedisplay Nothing
+  changeState stateRef $ const newState
 
 
 
@@ -179,6 +184,7 @@ data State = State { pos :: V3  -- the falling tetrominos Position
                    , viewRotation :: Int
                    , rng :: StdGen
                    , animationState :: Maybe AnimationState
+                   , isPaused :: Bool
                    }
 
 pos0 :: V3
@@ -190,7 +196,9 @@ state0 g = State { pos = pos0, tetromino = randomTetromino
                  , score = 0
                  , viewRotation = 0
                  , rng = g'
-                 , animationState = Nothing}
+                 , animationState = Nothing
+                 , isPaused = False
+                 }
                  where (randomTetromino, g') = random g
 
 cubeAt :: State -> V3 -> Bool
@@ -335,6 +343,9 @@ applyTetrominoRotation nRaw (Vector3 x y z) = Vector3 x (y*self-z*other) (z*self
  where self = (mod (n+1) 2)*((div n 2)*(-2)+1)  -- 1 0 -1 0 
        other = (mod n 2)*((div (n-1) 2)*(-2)+1)  -- 0 1 0 -1
        n = mod nRaw 4
+
+toggleIsPaused :: State -> State
+toggleIsPaused oldState = oldState { isPaused = not (isPaused oldState) }
 
 
 --- animations ---

@@ -1,1 +1,4 @@
 _darcs
+*.hi
+*.o
+Tetris3D

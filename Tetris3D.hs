@@ -75,7 +75,7 @@ display stateRef = do
     applyAnimationTetrominoRotation (viewRotation state) (animationState state)
     color $ Color3 0.5 1.0 (0.8::GLfloat)
     renderCubes $ tetrominoCubes (tetromino state)
-    when (isPaused state) $ preservingMatrix $ do
+    when (pauseState state == Paused) $ preservingMatrix $ do
       translate $ fromIntegralV $ v3 0 (-1) 2
       color $ Color3 1.0 1.0 (1.0::GLfloat)  -- ... render a ground plane ...
       scale 0.002 0.002 (0.002 :: GLfloat)
@@ -136,7 +136,7 @@ keyboardMouse stateRef (Char 'a') Down _ _ = changeState stateRef (rotateView (-
 keyboardMouse stateRef (Char 'd') Down _ _ = changeState stateRef (rotateView 1)
 keyboardMouse stateRef (Char 'w') Down _ _ = changeState stateRef (tryRotateTetromino (-1))
 keyboardMouse stateRef (Char 's') Down _ _ = changeState stateRef (tryRotateTetromino 1)
-keyboardMouse stateRef (Char 'p') Down _ _ = changeState stateRef toggleIsPaused
+keyboardMouse stateRef (Char 'p') Down _ _ = changeState stateRef togglePauseState
 keyboardMouse _ _ _ _ _ = return ()
 
 
@@ -155,7 +155,7 @@ changeState stateRef f = do
     putStrLn $ "SCORE: " ++ show (score newState)
   when (isJust (animationState newState)) $ do
     idleCallback $= Just (idleAnimation stateRef)
-  unless (isPaused oldState && isPaused newState) $ do
+  unless (pauseState oldState == Paused && pauseState newState == Paused) $ do
     stateRef $= newState
   postRedisplay Nothing
 
@@ -193,6 +193,8 @@ wholeField = [ v3 x y z | x <- [1..xMax], y <- [1..yMax], z <- [1..zMax] ]
 layer :: Int -> [V3]
 layer z = [ v3 x y z | x <- [1..xMax], y <- [1..yMax] ]
 
+data PauseState = Running | Paused | PauseRequested deriving (Eq, Show, Read)
+
 data State = State { pos :: V3  -- the falling tetrominos Position
                    , tetromino :: Tetromino
                    , cubes :: Array V3 (Maybe CubeColor)
@@ -200,7 +202,7 @@ data State = State { pos :: V3  -- the falling tetrominos Position
                    , viewRotation :: Int
                    , rng :: StdGen
                    , animationState :: Maybe AnimationState
-                   , isPaused :: Bool
+                   , pauseState :: PauseState
                    }
 
 pos0 :: V3
@@ -213,7 +215,7 @@ state0 g = State { pos = pos0, tetromino = randomTetromino
                  , viewRotation = 0
                  , rng = g'
                  , animationState = Nothing
-                 , isPaused = False
+                 , pauseState = Running
                  }
                  where (randomTetromino, g') = random g
 
@@ -254,7 +256,7 @@ cubeColor 5 = Color3 0.3 0.8 0.2
 cubeColor 6 = Color3 0.9 0.8 0.7
 cubeColor 7 = Color3 0.6 0.9 0.9
 
-brighter:: Color3 GLfloat -> Color3 GLfloat
+brighter :: Color3 GLfloat -> Color3 GLfloat
 brighter (Color3 r g b) = Color3 (min 1 (r*1.5)) (min 1 (g*1.5)) (min 1 (b*1.5))
 
 
@@ -302,12 +304,16 @@ move :: V3 -> State -> State
 move v oldState = oldState {pos = addV v (pos oldState)}
 
 newTetromino :: State -> State
-newTetromino oldState = testGameOver $ eraseCompletedLayersFrom 1 $
+newTetromino oldState = testPauseRequested $ testGameOver $ eraseCompletedLayersFrom 1 $
   (insertTetrominoCubes oldState) {pos=pos0, tetromino=randomTetromino, rng = g'}
   where (randomTetromino, g') = random (rng oldState)
 
 testGameOver :: State -> State
 testGameOver state = if collision state then state0 (rng state) else state
+
+testPauseRequested :: State -> State
+testPauseRequested oldState | pauseState oldState == PauseRequested = oldState { pauseState = Paused }
+                            | otherwise                             = oldState
 
 insertTetrominoCubes :: State -> State
 insertTetrominoCubes oldState = oldState { cubes = (cubes oldState) // (map (\(v, cc) -> (addV (pos oldState) v, Just cc)) (tetrominoCubes (tetromino oldState))) }
@@ -360,8 +366,12 @@ applyTetrominoRotation nRaw (Vector3 x y z) = Vector3 x (y*self-z*other) (z*self
        other = (mod n 2)*((div (n-1) 2)*(-2)+1)  -- 0 1 0 -1
        n = mod nRaw 4
 
-toggleIsPaused :: State -> State
-toggleIsPaused oldState = oldState { isPaused = not (isPaused oldState) }
+togglePauseState :: State -> State
+togglePauseState oldState = oldState { pauseState = newPauseState }
+  where newPauseState = case pauseState oldState of
+          Running -> PauseRequested
+          PauseRequested -> Running
+          Paused -> Running
 
 
 --- animations ---

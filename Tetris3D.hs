@@ -19,18 +19,16 @@ main = do
   putStrLn "move: up/down/left/right  rotate tetromino: W/S  rotate view: A/D  down: space  pause: P"
   putStrLn "Have fun!"
   rng <- newStdGen
-  stateRef <- newIORef (state0 rng)
+  stateRef <- newIORef (state0 rng 0)
   initialDisplayMode $= [WithDepthBuffer]
   initialWindowSize $= Size 650 650
   window <- createWindow "Tetris 3D"
   matrixMode $= Projection
   frustum (-0.05) (0.05) (-0.05) (0.05) (0.1) (100.0)
   matrixMode $= Modelview 0
-  depthFunc $= Just Lequal
   clearColor $= Color4 0.0 0.0 0.0 1.0
   displayListCube <- defineNewList Compile $ renderCubeWithChamfer 0.1
   -- setup lighting
-  lighting $= Enabled
   lightModelLocalViewer $= Enabled
   materialEmission FrontAndBack $= Color4 0.0 0.0 0.0 1.0
   materialSpecular FrontAndBack $= Color4 1.0 1.0 1.0 1.0
@@ -49,7 +47,7 @@ main = do
   reshapeCallback $= Just reshape
   displayCallback $= display displayListCube stateRef
   keyboardMouseCallback $= Just (keyboardMouse stateRef)
-  addTimerCallback initialTimeout (timer stateRef)
+  startTimerLoop stateRef initialTimeout
   mainLoop
 
 
@@ -63,6 +61,8 @@ display :: DisplayList -> IORef State -> DisplayCallback
 display displayListCube stateRef = do
   state <- get stateRef
   loadIdentity
+  depthFunc $= Just Lequal
+  lighting $= Enabled
   clear [ColorBuffer, DepthBuffer]
   rotate (-20) $ Vector3 1 0 (0::GLfloat)  -- Rotate down and ...
   translate $ Vector3 0 3.0 (-6::GLfloat)  -- ... move to the falling tetromino ...
@@ -76,11 +76,6 @@ display displayListCube stateRef = do
     applyAnimationTetrominoRotation (viewRotation state) (animationState state)
     color $ Color3 0.5 1.0 (0.8::GLfloat)
     renderCubes displayListCube $ tetrominoCubes (tetromino state)
-    when (pauseState state == Paused) $ preservingMatrix $ do
-      translate $ fromIntegralV $ v3 0 (-1) 2
-      color $ Color3 1.0 1.0 (1.0::GLfloat)
-      scale 0.002 0.002 (0.002 :: GLfloat)
-      renderString MonoRoman "PAUSED"
   color $ Color3 1.0 1.0 (1.0::GLfloat)  -- ... render a ground plane ...
   normal (Normal3 0 0 (1::GLfloat))
   renderPrimitive Quads $
@@ -88,6 +83,14 @@ display displayListCube stateRef = do
       [(0.4, 0.4), (0.4, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, 0.4)]
   color $ Color3 0.0 0.7 (1.0::GLfloat)  -- ... and all the static cubes.
   renderCubes displayListCube (allCubes state)
+  when (pauseState state /= Running) $ do
+    loadIdentity
+    depthFunc $= Nothing
+    lighting $= Disabled
+    translate $ Vector3 (-1.8) 1.6 (-4::GLfloat)
+    color $ Color3 1.0 1.0 (1.0::GLfloat)
+    scale 0.002 0.002 (0.002 :: GLfloat)
+    renderString MonoRoman $ pauseString $ pauseState state
   flush
 
 
@@ -137,28 +140,45 @@ keyboardMouse stateRef (Char 'a') Down _ _ = changeState stateRef (rotateView (-
 keyboardMouse stateRef (Char 'd') Down _ _ = changeState stateRef (rotateView 1)
 keyboardMouse stateRef (Char 'w') Down _ _ = changeState stateRef (tryRotateTetromino (-1))
 keyboardMouse stateRef (Char 's') Down _ _ = changeState stateRef (tryRotateTetromino 1)
-keyboardMouse stateRef (Char 'p') Down _ _ = changeState stateRef togglePauseState
+keyboardMouse stateRef (Char 'p') Down _ _ = do
+  oldState <- get stateRef
+  case pauseState oldState of
+    Running -> changeState stateRef requestPause
+    PauseRequested -> changeState stateRef unrequestPause
+    Paused -> do
+	  stateRef $= oldState {pauseState = Running}
+	  postRedisplay Nothing
+	  startTimerLoop stateRef 500
 keyboardMouse _ _ _ _ _ = return ()
 
 
-timer :: IORef State -> TimerCallback
-timer stateRef = do
+startTimerLoop :: IORef State -> Int -> IO ()
+startTimerLoop stateRef timeout = do
   oldState <- get stateRef
-  addTimerCallback (div (initialTimeout*5) ((score oldState)+5)) (timer stateRef)
-  changeState stateRef tickDown
+  let newTimerLoopID = (timerLoopID oldState) + 1
+  stateRef $= oldState {timerLoopID = newTimerLoopID}
+  addTimerCallback timeout $ timer newTimerLoopID stateRef
+
+timer :: Int -> IORef State -> TimerCallback
+timer loopID stateRef = do
+  oldState <- get stateRef
+  unless ((timerLoopID oldState /= loopID) || (pauseState oldState == Paused)) $ do
+    changeState stateRef tickDown
+    newState <- get stateRef
+    addTimerCallback (div (initialTimeout*5) ((score newState)+5)) (timer loopID stateRef)
 
 
 changeState :: IORef State -> (State -> State) -> IO ()
 changeState stateRef f = do
   oldState <- get stateRef
-  let newState = f oldState
-  when (score oldState /= score newState) $ do
-    putStrLn $ "SCORE: " ++ show (score newState)
-  when (isJust (animationState newState)) $ do
-    idleCallback $= Just (idleAnimation stateRef)
-  unless (pauseState oldState == Paused && pauseState newState == Paused) $ do
+  unless (pauseState oldState == Paused) $ do
+    let newState = f oldState
     stateRef $= newState
-  postRedisplay Nothing
+    when (score oldState /= score newState) $ do
+      putStrLn $ "SCORE: " ++ show (score newState)
+    when (isJust (animationState newState)) $ do
+      idleCallback $= Just (idleAnimation stateRef)
+    postRedisplay Nothing
 
 initialTimeout :: Timeout
 initialTimeout = 2000
@@ -169,11 +189,13 @@ idleAnimation stateRef = do
   threadDelay 20
   oldState <- get stateRef
   let newState = oldState {animationState = proceedAnimation (animationState oldState)}
+  stateRef $= newState
   when (isNothing (animationState newState)) $ idleCallback $= Nothing
-  changeState stateRef $ const newState
+  postRedisplay Nothing
 
 
 
+  
 
 -- from above:
 -- y
@@ -196,6 +218,12 @@ layer z = [ v3 x y z | x <- [1..xMax], y <- [1..yMax] ]
 
 data PauseState = Running | Paused | PauseRequested deriving (Eq, Show, Read)
 
+pauseString :: PauseState -> String
+pauseString Running = ""
+pauseString Paused = "PAUSED"
+pauseString PauseRequested = "pause requested"
+
+
 data State = State { pos :: V3  -- the falling tetrominos Position
                    , tetromino :: Tetromino
                    , cubes :: Array V3 (Maybe CubeColor)
@@ -204,21 +232,24 @@ data State = State { pos :: V3  -- the falling tetrominos Position
                    , rng :: StdGen
                    , animationState :: Maybe AnimationState
                    , pauseState :: PauseState
+                   , timerLoopID :: Int  -- increasing this in startTimerLoop breaks the old loop
                    }
 
 pos0 :: V3
 pos0 = v3 (div xMax 2) (div yMax 2) (zMax-1)
 
-state0 :: StdGen -> State
-state0 g = State { pos = pos0, tetromino = randomTetromino
-                 , cubes = array ((v3 1 1 1), (v3 xMax yMax zMax)) [ (v, Nothing) | v <- wholeField ]
-                 , score = 0
-                 , viewRotation = 0
-                 , rng = g'
-                 , animationState = Nothing
-                 , pauseState = Running
-                 }
-                 where (randomTetromino, g') = random g
+state0 :: StdGen -> Int -> State
+state0 g timerLoopID = State
+  { pos = pos0, tetromino = randomTetromino
+  , cubes = array ((v3 1 1 1), (v3 xMax yMax zMax)) [ (v, Nothing) | v <- wholeField ]
+  , score = 0
+  , viewRotation = 0
+  , rng = g'
+  , animationState = Nothing
+  , pauseState = Running
+  , timerLoopID = timerLoopID
+  }
+  where (randomTetromino, g') = random g
 
 cubeAt :: State -> V3 -> Bool
 cubeAt s (Vector3 x y z) | x<=0 || x>xMax = True
@@ -293,7 +324,7 @@ tetrominos = map Tetromino
 
 
 tickDown :: State -> State
-tickDown oldState = if collision (oneDown oldState) then newTetromino oldState else oneDown oldState
+tickDown oldState = if collision (oneDown oldState) then newTetrominoOrPause oldState else oneDown oldState
 
 oneDown :: State -> State
 oneDown oldState = oldState {pos = addV (pos oldState) (v3 0 0 (-1))}
@@ -304,17 +335,17 @@ tryMove v oldState = if collision (move v oldState) then oldState else move v ol
 move :: V3 -> State -> State
 move v oldState = oldState {pos = addV v (pos oldState)}
 
+newTetrominoOrPause :: State -> State
+newTetrominoOrPause oldState | pauseState oldState == PauseRequested = oldState {pauseState = Paused}
+                             | otherwise                             = newTetromino oldState
+
 newTetromino :: State -> State
-newTetromino oldState = testPauseRequested $ testGameOver $ eraseCompletedLayersFrom 1 $
+newTetromino oldState = testGameOver $ eraseCompletedLayersFrom 1 $
   (insertTetrominoCubes oldState) {pos=pos0, tetromino=randomTetromino, rng = g'}
   where (randomTetromino, g') = random (rng oldState)
 
 testGameOver :: State -> State
-testGameOver state = if collision state then state0 (rng state) else state
-
-testPauseRequested :: State -> State
-testPauseRequested oldState | pauseState oldState == PauseRequested = oldState { pauseState = Paused }
-                            | otherwise                             = oldState
+testGameOver state = if collision state then state0 (rng state) (timerLoopID state) else state
 
 insertTetrominoCubes :: State -> State
 insertTetrominoCubes oldState = oldState { cubes = (cubes oldState) // (map (\(v, cc) -> (addV (pos oldState) v, Just cc)) (tetrominoCubes (tetromino oldState))) }
@@ -334,6 +365,15 @@ eraseLayer l state | l == zMax = state {cubes = (cubes state) // [ (v, Nothing) 
 
 collision :: State -> Bool
 collision state = any (cubeAt state . addV (pos state) . fst) (tetrominoCubes (tetromino state))
+
+requestPause :: State -> State
+requestPause oldState | pauseState oldState == Running = oldState {pauseState = PauseRequested}
+                      | otherwise                      = oldState
+
+unrequestPause :: State -> State
+unrequestPause oldState | pauseState oldState == PauseRequested = oldState {pauseState = Running}
+                        | otherwise                             = oldState
+
 
 
 --- rotating everything ---
@@ -367,12 +407,6 @@ applyTetrominoRotation nRaw (Vector3 x y z) = Vector3 x (y*self-z*other) (z*self
        other = (mod n 2)*((div (n-1) 2)*(-2)+1)  -- 0 1 0 -1
        n = mod nRaw 4
 
-togglePauseState :: State -> State
-togglePauseState oldState = oldState { pauseState = newPauseState }
-  where newPauseState = case pauseState oldState of
-          Running -> PauseRequested
-          PauseRequested -> Running
-          Paused -> Running
 
 
 --- animations ---

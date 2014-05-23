@@ -21,13 +21,14 @@ main = do
   rng <- newStdGen
   stateRef <- newIORef (state0 rng)
   initialDisplayMode $= [WithDepthBuffer]
-  initialWindowSize $= Size 512 512
+  initialWindowSize $= Size 650 650
   window <- createWindow "Tetris 3D"
   matrixMode $= Projection
   frustum (-0.05) (0.05) (-0.05) (0.05) (0.1) (100.0)
   matrixMode $= Modelview 0
   depthFunc $= Just Lequal
   clearColor $= Color4 0.0 0.0 0.0 1.0
+  displayListCube <- defineNewList Compile $ renderCubeWithChamfer 0.1
   -- setup lighting
   lighting $= Enabled
   lightModelLocalViewer $= Enabled
@@ -46,7 +47,7 @@ main = do
   attenuation (Light 1) $= (0 , 0.3, 0.05)
   -- set callbacks
   reshapeCallback $= Just reshape
-  displayCallback $= display stateRef
+  displayCallback $= display displayListCube stateRef
   keyboardMouseCallback $= Just (keyboardMouse stateRef)
   addTimerCallback initialTimeout (timer stateRef)
   mainLoop
@@ -58,8 +59,8 @@ reshape size = do
   viewport $= (Position 0 0, size)
 
 
-display :: IORef State -> DisplayCallback
-display stateRef = do
+display :: DisplayList -> IORef State -> DisplayCallback
+display displayListCube stateRef = do
   state <- get stateRef
   loadIdentity
   clear [ColorBuffer, DepthBuffer]
@@ -74,10 +75,10 @@ display stateRef = do
     translate $ fromIntegralV $ pos state
     applyAnimationTetrominoRotation (viewRotation state) (animationState state)
     color $ Color3 0.5 1.0 (0.8::GLfloat)
-    renderCubes $ tetrominoCubes (tetromino state)
+    renderCubes displayListCube $ tetrominoCubes (tetromino state)
     when (pauseState state == Paused) $ preservingMatrix $ do
       translate $ fromIntegralV $ v3 0 (-1) 2
-      color $ Color3 1.0 1.0 (1.0::GLfloat)  -- ... render a ground plane ...
+      color $ Color3 1.0 1.0 (1.0::GLfloat)
       scale 0.002 0.002 (0.002 :: GLfloat)
       renderString MonoRoman "PAUSED"
   color $ Color3 1.0 1.0 (1.0::GLfloat)  -- ... render a ground plane ...
@@ -86,7 +87,7 @@ display stateRef = do
     mapM_ (\(x, y) -> vertex (Vertex3 x y (0.5::GLfloat)))
       [(0.4, 0.4), (0.4, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, 0.4)]
   color $ Color3 0.0 0.7 (1.0::GLfloat)  -- ... and all the static cubes.
-  renderCubes (allCubes state)
+  renderCubes displayListCube (allCubes state)
   flush
 
 
@@ -102,11 +103,11 @@ applyAnimationTetrominoRotation viewRotation (Just (TetrominoRotation dir, n)) =
 applyAnimationTetrominoRotation _ _ = return ()
 
 
-renderCubes :: [(V3, CubeColor)] -> IO ()
-renderCubes = mapM_ $ \(v, cc) -> preservingMatrix $ do
+renderCubes :: DisplayList -> [(V3, CubeColor)] -> IO ()
+renderCubes displayListCube = mapM_ $ \(v, cc) -> preservingMatrix $ do
   translate (fromIntegralV v)
   color (cubeColor cc)
-  renderCubeWithChamfer 0.1
+  callList displayListCube
 
 renderCubeWithChamfer :: GLfloat -> IO ()
 renderCubeWithChamfer p =

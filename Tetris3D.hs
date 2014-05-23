@@ -32,18 +32,18 @@ main = do
   lighting $= Enabled
   lightModelLocalViewer $= Enabled
   materialEmission FrontAndBack $= Color4 0.0 0.0 0.0 1.0
-  materialSpecular FrontAndBack $= Color4 0.0 0.0 0.0 1.0
+  materialSpecular FrontAndBack $= Color4 1.0 1.0 1.0 1.0
   colorMaterial $= Just (FrontAndBack, AmbientAndDiffuse)
   light (Light 0) $= Enabled
   light (Light 1) $= Enabled
-  ambient (Light 0) $= Color4 0.3 0.2 0.2 1
+  ambient (Light 0) $= Color4 0.1 0.1 0.1 1
   diffuse (Light 0) $= Color4 0.9 1.0 0.8 1
-  ambient (Light 1) $= Color4 0.3 0.2 0.3 1
+  ambient (Light 1) $= Color4 0.1 0.1 0.1 1
   diffuse (Light 1) $= Color4 1.0 0.9 1.0 1
-  specular (Light 0) $= Color4 0 0 0 1
-  specular (Light 1) $= Color4 0 0 0 1
-  attenuation (Light 0) $= (0 , 0.5, 0)
-  attenuation (Light 1) $= (0 , 0.5, 0)
+  specular (Light 0) $= Color4 0.2 0.2 0.2 1
+  specular (Light 1) $= Color4 0.2 0.2 0.2 1
+  attenuation (Light 0) $= (0 , 0.3, 0.05)
+  attenuation (Light 1) $= (0 , 0.3, 0.05)
   -- set callbacks
   reshapeCallback $= Just reshape
   displayCallback $= display stateRef
@@ -106,9 +106,25 @@ renderCubes :: [(V3, CubeColor)] -> IO ()
 renderCubes = mapM_ $ \(v, cc) -> preservingMatrix $ do
   translate (fromIntegralV v)
   color (cubeColor cc)
-  renderObject Solid (Cube 1)
-  color (Color3 1 1 (1::GLfloat))
-  renderObject Wireframe (Cube 1)
+  renderCubeWithChamfer 0.1
+
+renderCubeWithChamfer :: GLfloat -> IO ()
+renderCubeWithChamfer p =
+  mapM_ (\rotation -> preservingMatrix (rotation >> renderCubeFaceWithChamfer p))
+  ([rotate angle (Vector3 1 0 (0::GLfloat)) | angle <- [0, 90, 180, 270]]
+  ++ [rotate angle (Vector3 0 1 (0::GLfloat)) | angle <- [90, 270]])
+
+renderCubeFaceWithChamfer :: GLfloat -> IO ()
+renderCubeFaceWithChamfer p = do
+  normal (Normal3 0 0 (1::GLfloat))
+  renderPrimitive Quads $ mapM_ (\(x, y) -> vertex (Vertex3 x y (c::GLfloat))) [(-a, -a), (-a, a), (a, a), (a, -a)]
+  (\chamferPart -> chamferPart >> chamferPart >> chamferPart >> chamferPart) $ do
+  rotate 90 (Vector3 0 0 (1::GLfloat))
+  normal (Normal3 1.414 0 (1.414::GLfloat))
+  renderPrimitive Quads $ mapM_ (\(x, y, z) -> vertex (Vertex3 x y (z::GLfloat))) [(b, b, b), (b, -b, b), (a, -a, c), (a, a, c)]
+  where a = 0.5*(1-p)
+        b = 0.5*(1-0.5*p)
+        c = 0.5
 
 keyboardMouse :: IORef State -> KeyboardMouseCallback
 keyboardMouse stateRef (Char ' ') Down _ _ = changeState stateRef tickDown

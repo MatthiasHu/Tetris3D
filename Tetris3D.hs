@@ -45,7 +45,9 @@ main = do
   attenuation (Light 1) $= (0 , 0.3, 0.05)
   -- set callbacks
   reshapeCallback $= Just reshape
-  displayCallback $= display displayListCube stateRef
+  list1 <- defineNewList Compile (return ())
+  list2 <- defineNewList Compile (return ())
+  displayCallback $= display displayListCube (list1, list2) stateRef
   keyboardMouseCallback $= Just (keyboardMouse stateRef)
   startTimerLoop stateRef initialTimeout
   mainLoop
@@ -57,10 +59,14 @@ reshape size = do
   viewport $= (Position 0 0, size)
 
 
-display :: DisplayList -> IORef State -> DisplayCallback
-display displayListCube stateRef = do
+display :: DisplayList -> (DisplayList, DisplayList) -> IORef State -> DisplayCallback
+display displayListCube (staticCubesList, relevantEdgesList) stateRef = do
   state <- get stateRef
-  loadIdentity
+  when (staticCubesChanged state) $ do  -- Update the display lists for the static scene if necessary.
+    defineList staticCubesList Compile $ renderCubes displayListCube (allCubes state)
+    defineList relevantEdgesList Compile $ renderEdges (allRelevantEdges state)
+    stateRef $= state { staticCubesChanged = False }
+  loadIdentity  -- Prepare for rendering.
   depthFunc $= Just Lequal
   lighting $= Enabled
   clear [ColorBuffer, DepthBuffer]
@@ -74,7 +80,6 @@ display displayListCube stateRef = do
   preservingMatrix $ do  -- ... render the falling tetromino ...
     translate $ fromIntegralV $ pos state
     applyAnimationTetrominoRotation (viewRotation state) (animationState state)
-    color $ Color3 0.5 1.0 (0.8::GLfloat)
     renderCubes displayListCube $ tetrominoCubes (tetromino state)
   color $ Color3 1.0 1.0 (1.0::GLfloat)  -- ... render a ground plane ...
   normal (Normal3 0 0 (1::GLfloat))
@@ -82,15 +87,15 @@ display displayListCube stateRef = do
     mapM_ (\(x, y) -> vertex (Vertex3 x y (0.5::GLfloat)))
       [(0.4, 0.4), (0.4, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, 0.4)]
   color $ Color3 0.0 0.7 (1.0::GLfloat)  -- ... and all the static cubes ...
-  renderCubes displayListCube (allCubes state)
+  callList staticCubesList
   lighting $= Disabled  -- ... and the relevant edges.
   color $ Color3 1 1 (1::GLfloat)
-  renderEdges (allRelevantEdges state)
+  callList relevantEdgesList
   when (pauseState state /= Running) $ do
     loadIdentity
     depthFunc $= Nothing
     translate $ Vector3 (-1.8) 1.6 (-4::GLfloat)
-    color $ Color3 1.0 1.0 (1.0::GLfloat)
+    color $ Color3 1 1 (1::GLfloat)
     scale 0.002 0.002 (0.002 :: GLfloat)
     renderString MonoRoman $ pauseString $ pauseState state
   flush
@@ -252,6 +257,7 @@ data State = State { pos :: V3  -- the falling tetrominos Position
                    , animationState :: Maybe AnimationState
                    , pauseState :: PauseState
                    , timerLoopID :: Int  -- increasing this in startTimerLoop breaks the old loop
+                   , staticCubesChanged :: Bool  -- must be set to True whenever "cubes" is changed; display resets it
                    }
 
 pos0 :: V3
@@ -267,6 +273,7 @@ state0 g timerLoopID = State
   , animationState = Nothing
   , pauseState = Running
   , timerLoopID = timerLoopID
+  , staticCubesChanged = True
   }
   where (randomTetromino, g') = random g
 
@@ -404,7 +411,9 @@ testGameOver :: State -> State
 testGameOver state = if collision state then state0 (rng state) (timerLoopID state) else state
 
 insertTetrominoCubes :: State -> State
-insertTetrominoCubes oldState = oldState { cubes = (cubes oldState) // (map (\(v, cc) -> (addV (pos oldState) v, Just cc)) (tetrominoCubes (tetromino oldState))) }
+insertTetrominoCubes oldState =
+  oldState { cubes = (cubes oldState) // (map (\(v, cc) -> (addV (pos oldState) v, Just cc)) (tetrominoCubes (tetromino oldState)))
+           , staticCubesChanged = True }
 
 eraseCompletedLayersFrom :: Int -> State -> State
 eraseCompletedLayersFrom layer state

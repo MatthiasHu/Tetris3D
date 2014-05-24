@@ -83,12 +83,12 @@ display displayListCube stateRef = do
       [(0.4, 0.4), (0.4, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, 0.4)]
   color $ Color3 0.0 0.7 (1.0::GLfloat)  -- ... and all the static cubes ...
   renderCubes displayListCube (allCubes state)
-  depthFunc $= Nothing  -- ... and the holes.
-  color $ Color3 0 0 (0::GLfloat)
-  renderHoles (allHoles state)
+  lighting $= Disabled  -- ... and the relevant edges.
+  color $ Color3 1 1 (1::GLfloat)
+  renderEdges (allRelevantEdges state)
   when (pauseState state /= Running) $ do
     loadIdentity
-    lighting $= Disabled
+    depthFunc $= Nothing
     translate $ Vector3 (-1.8) 1.6 (-4::GLfloat)
     color $ Color3 1.0 1.0 (1.0::GLfloat)
     scale 0.002 0.002 (0.002 :: GLfloat)
@@ -118,6 +118,18 @@ renderHoles :: [V3] -> IO ()
 renderHoles = mapM_ $ \v -> preservingMatrix $ do
   translate (fromIntegralV v)
   renderObject Wireframe (Cube 1)
+
+renderEdges :: [Edge] -> IO ()
+renderEdges = mapM_ $ \(Edge et v) -> preservingMatrix $ do
+  translate (fromIntegralV v)
+  renderPrimitive Lines $ do
+    vertex (Vertex3 (-0.5) (-0.5) (-0.5::GLfloat))
+    vertex (secondVertex et)
+
+secondVertex :: EdgeType -> Vertex3 GLfloat
+secondVertex LowerXLowerY = Vertex3 (-0.5) (-0.5) 0.5
+secondVertex LowerYLowerZ = Vertex3 0.5 (-0.5) (-0.5)
+secondVertex LowerXLowerZ = Vertex3 (-0.5) 0.5 (-0.5)
 
 renderCubeWithChamfer :: GLfloat -> IO ()
 renderCubeWithChamfer p =
@@ -275,6 +287,35 @@ holesUnder:: State -> V3 -> [V3]
 holesUnder s position | cubeAt s beneath = []
                       | otherwise        = beneath : (holesUnder s beneath)
                       where beneath = addV position (v3 0 0 (-1))
+
+data Edge = Edge EdgeType V3
+
+data EdgeType = LowerXLowerY | LowerYLowerZ | LowerXLowerZ
+
+allRelevantEdges :: State -> [Edge]
+allRelevantEdges s = filter (isEdgeRelevant s) allEdges
+
+allEdges :: [Edge]
+allEdges = [Edge LowerXLowerY (v3 x y z) | x <- [1..xMax+1], y <- [1..yMax+1], z <- [1..zMax]]
+        ++ [Edge LowerYLowerZ (v3 x y z) | x <- [1..xMax], y <- [1..yMax+1], z <- [1..zMax+1]]
+        ++ [Edge LowerXLowerZ (v3 x y z) | x <- [1..xMax+1], y <- [1..yMax], z <- [1..zMax+1]]
+
+isEdgeRelevant :: State -> Edge -> Bool
+isEdgeRelevant s (Edge et v) = isEdgeRelevantFromSurroundingCubes $ [cubeAt s $ addV v dv | dv <- surroundingPositions et]
+
+surroundingPositions :: EdgeType -> [V3]
+surroundingPositions LowerXLowerY = [v3 0 0 0, v3 (-1) 0 0, v3 (-1) (-1) 0, v3 0 (-1) 0]
+surroundingPositions LowerYLowerZ = [v3 0 0 0, v3 0 (-1) 0, v3 0 (-1) (-1), v3 0 0 (-1)]
+surroundingPositions LowerXLowerZ = [v3 0 0 0, v3 (-1) 0 0, v3 (-1) 0 (-1), v3 0 0 (-1)]
+
+isEdgeRelevantFromSurroundingCubes :: [Bool] -> Bool  -- List must contain four values!
+isEdgeRelevantFromSurroundingCubes [False, False, False, False] = False
+isEdgeRelevantFromSurroundingCubes [True , True , True , True ] = False
+isEdgeRelevantFromSurroundingCubes [True , True , False, False] = False
+isEdgeRelevantFromSurroundingCubes [False, True , True , False] = False
+isEdgeRelevantFromSurroundingCubes [False, False, True , True ] = False
+isEdgeRelevantFromSurroundingCubes [True , False, False, True ] = False
+isEdgeRelevantFromSurroundingCubes _                            = True
 
 
 type V3 = Vector3 Int

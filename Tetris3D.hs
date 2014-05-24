@@ -1,4 +1,4 @@
--- still missing:  show holes
+
 
 
 import Graphics.UI.GLUT
@@ -27,7 +27,7 @@ main = do
   frustum (-0.05) (0.05) (-0.05) (0.05) (0.1) (100.0)
   matrixMode $= Modelview 0
   clearColor $= Color4 0.0 0.0 0.0 1.0
-  displayListCube <- defineNewList Compile $ renderCubeWithChamfer 0.1
+  displayListCube <- defineNewList Compile $ renderCubeWithChamfer 0.2
   -- setup lighting
   lightModelLocalViewer $= Enabled
   materialEmission FrontAndBack $= Color4 0.0 0.0 0.0 1.0
@@ -81,11 +81,13 @@ display displayListCube stateRef = do
   renderPrimitive Quads $
     mapM_ (\(x, y) -> vertex (Vertex3 x y (0.5::GLfloat)))
       [(0.4, 0.4), (0.4, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, (fromIntegral yMax)+0.6), ((fromIntegral xMax)+0.6, 0.4)]
-  color $ Color3 0.0 0.7 (1.0::GLfloat)  -- ... and all the static cubes.
+  color $ Color3 0.0 0.7 (1.0::GLfloat)  -- ... and all the static cubes ...
   renderCubes displayListCube (allCubes state)
+  depthFunc $= Nothing  -- ... and the holes.
+  color $ Color3 0 0 (0::GLfloat)
+  renderHoles (allHoles state)
   when (pauseState state /= Running) $ do
     loadIdentity
-    depthFunc $= Nothing
     lighting $= Disabled
     translate $ Vector3 (-1.8) 1.6 (-4::GLfloat)
     color $ Color3 1.0 1.0 (1.0::GLfloat)
@@ -111,6 +113,11 @@ renderCubes displayListCube = mapM_ $ \(v, cc) -> preservingMatrix $ do
   translate (fromIntegralV v)
   color (cubeColor cc)
   callList displayListCube
+
+renderHoles :: [V3] -> IO ()
+renderHoles = mapM_ $ \v -> preservingMatrix $ do
+  translate (fromIntegralV v)
+  renderObject Wireframe (Cube 1)
 
 renderCubeWithChamfer :: GLfloat -> IO ()
 renderCubeWithChamfer p =
@@ -260,6 +267,14 @@ cubeAt s (Vector3 x y z) | x<=0 || x>xMax = True
 
 allCubes :: State -> [(V3, CubeColor)]
 allCubes s = [ (v, cc) | v <- wholeField, Just cc <- [(cubes s)!v]]
+
+allHoles :: State -> [V3]
+allHoles s = concat [ holesUnder s cube | (cube, _) <- allCubes s]
+
+holesUnder:: State -> V3 -> [V3]
+holesUnder s position | cubeAt s beneath = []
+                      | otherwise        = beneath : (holesUnder s beneath)
+                      where beneath = addV position (v3 0 0 (-1))
 
 
 type V3 = Vector3 Int

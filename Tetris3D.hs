@@ -1,9 +1,9 @@
 
 
-
 import Graphics.UI.GLUT
 import Data.IORef
 import Data.Array
+import Data.List ((\\))
 import Control.Arrow (first)
 import Control.Monad (when, unless)
 import Data.Maybe (isJust, isNothing)
@@ -172,7 +172,7 @@ keyboardMouse stateRef (Char 'p') Down _ _ = do
     Paused -> do
 	  stateRef $= oldState {pauseState = Running}
 	  postRedisplay Nothing
-	  startTimerLoop stateRef 500
+	  startTimerLoop stateRef 0
 keyboardMouse _ _ _ _ _ = return ()
 
 
@@ -325,6 +325,31 @@ isEdgeRelevantFromSurroundingCubes [True , False, False, True ] = False
 isEdgeRelevantFromSurroundingCubes _                            = True
 
 
+newtype Transformation = Transformation (V3, V3, V3) deriving Show
+
+instance Random Transformation where
+  randomR _ = random
+  random = first (\rn -> transformationFromNumber rn) . next
+
+transformationFromNumber :: Int -> Transformation
+transformationFromNumber n = Transformation (v1, v2, v3) where
+  v1 = (standardDirection dim1 val1)
+  v2 = (standardDirection dim2 val2)
+  v3 = cross v1 v2
+  val1 = (mod n 2)*2 -1
+  val2 = (mod (div n 2) 2)*2 -1
+  dim1 = mod (div n 4) 3
+  dim2 = ([0..2]\\[dim1]) !! (mod (div n 12) 2)
+
+standardDirection :: Int -> Int -> V3
+standardDirection 0 val = v3 val 0 0
+standardDirection 1 val = v3 0 val 0
+standardDirection 2 val = v3 0 0 val
+
+transform :: Transformation -> V3 -> V3
+transform (Transformation (Vector3 x1 y1 z1, Vector3 x2 y2 z2, Vector3 x3 y3 z3))  (Vector3 v1 v2 v3) =
+  Vector3 (v1*x1+v2*x2+v3*x3) (v1*y1+v2*y2+v3*y3) (v1*z1+v2*z2+v3*z3)
+
 type V3 = Vector3 Int
 v3 :: Int -> Int -> Int -> V3
 v3 = Vector3
@@ -332,12 +357,15 @@ v3 = Vector3
 fromIntegralV :: V3 -> Vector3 GLfloat
 fromIntegralV (Vector3 x y z) = Vector3 (fromIntegral x) (fromIntegral y) (fromIntegral z)
 
-
 addV :: V3 -> V3 -> V3
 addV (Vector3 x1 y1 z1) (Vector3 x2 y2 z2) = Vector3 (x1+x2) (y1+y2) (z1+z2)
 
 negateV :: V3 -> V3
 negateV (Vector3 x y z) = Vector3 (-x) (-y) (-z)
+
+cross :: V3 -> V3 -> V3
+cross (Vector3 x1 y1 z1) (Vector3 x2 y2 z2) = v3 (y1*z2-z1*y2) (z1*x2-x1*z2) (x1*y2-y1*x2)
+
 
 type CubeColor = Int
 
@@ -360,7 +388,12 @@ newtype Tetromino = Tetromino { tetrominoCubes :: [(V3, CubeColor)] }
 
 instance Random Tetromino where
   randomR _ = random
-  random = first ((tetrominos !!) . (`mod` (length tetrominos))) . next
+  random g = (transformTetromino transformation (tetrominos !! (mod rn (length tetrominos))), g'')
+    where (transformation, g') = random g
+          (rn, g'') = next g'
+
+transformTetromino :: Transformation -> Tetromino -> Tetromino
+transformTetromino transformation (Tetromino list) = Tetromino $ map (first $ transform transformation) list
 
 oneCube :: Tetromino
 oneCube = Tetromino [(v3 0 0 0, 0)]

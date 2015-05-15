@@ -8,7 +8,7 @@ import Control.Arrow (first)
 import Control.Monad (when, unless)
 import Data.Maybe (isJust, isNothing)
 import System.Random
-import Control.Concurrent (threadDelay)
+import Control.Concurrent.Suspend
 
 
 
@@ -210,7 +210,7 @@ initialTimeout = 2000
 
 idleAnimation :: IORef State -> IdleCallback
 idleAnimation stateRef = do
-  threadDelay 20
+  suspend $ msDelay 10
   oldState <- get stateRef
   let newState = oldState {animationState = proceedAnimation (animationState oldState)}
   stateRef $= newState
